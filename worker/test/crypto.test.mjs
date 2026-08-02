@@ -5,6 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
   createHmac, createDecipheriv, createPrivateKey, createPublicKey,
   diffieHellman, hkdfSync,
@@ -228,6 +229,20 @@ test('recovery code hashing round-trips and rejects wrong codes', async () => {
   // Same code, different salt => different hash (no rainbow tables).
   const second = await hashSecret('ABCD-EFGH-JKLM');
   assert.notEqual(second.hash, hash);
+});
+
+test('PBKDF2 iterations stay within the Workers runtime limit', async () => {
+  // Cloudflare Workers throws NotSupportedError above 100k iterations. Node
+  // has no such cap, so this would pass locally and fail only in production —
+  // assert the constant directly against the source.
+  const src = await readFile(new URL('../src/util.js', import.meta.url), 'utf8');
+  const match = /const PBKDF2_ITERS = ([\d_]+);/.exec(src);
+
+  assert.ok(match, 'PBKDF2_ITERS constant not found');
+  const iters = parseInt(match[1].replace(/_/g, ''), 10);
+
+  assert.ok(iters <= 100_000, `PBKDF2_ITERS is ${iters}; Workers rejects anything above 100000`);
+  assert.ok(iters >= 50_000, `PBKDF2_ITERS is ${iters}; too low to be worth doing`);
 });
 
 test('timingSafeEqual compares correctly', () => {

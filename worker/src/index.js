@@ -46,6 +46,20 @@ export default {
       /* ---- app API ---- */
       if (path.startsWith('/api/')) return await handleApi(req, env, path, ctx);
 
+      /* ---- outgoing greeting ---- */
+      // Deliberately unauthenticated: Twilio fetches this anonymously while
+      // placing a call, and it is the message every caller already hears.
+      if (path === '/greeting.mp3' && req.method === 'GET') {
+        const object = await env.AUDIO.get('greeting/greeting.mp3');
+        if (!object) return new Response('No greeting uploaded', { status: 404 });
+        return new Response(object.body, {
+          headers: {
+            'Content-Type': 'audio/mpeg',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
+
       /* ---- health ---- */
       if (path === '/' || path === '/health') {
         return json({

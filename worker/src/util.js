@@ -30,8 +30,15 @@ export async function sha256(input) {
   return b64urlEncode(await crypto.subtle.digest('SHA-256', data));
 }
 
-// Recovery codes are lower-entropy and human-typed, so stretch them.
-const PBKDF2_ITERS = 210_000;
+// Recovery codes are human-typed, so stretch them before storing.
+//
+// Cloudflare Workers hard-caps PBKDF2 at 100k iterations and throws
+// NotSupportedError above it — OWASP's 210k recommendation is not reachable
+// here. That ceiling is fine for this use: the codes carry ~60 bits of entropy
+// (12 chars from a 32-char alphabet), so they are not guessable by brute force
+// regardless of stretching. The KDF is defence-in-depth for a database leak,
+// not the primary barrier.
+const PBKDF2_ITERS = 100_000;
 
 export async function hashSecret(secret, saltB64) {
   const salt = saltB64 ? b64urlDecode(saltB64) : randomBytes(16);
