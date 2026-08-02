@@ -93,11 +93,52 @@ function emailConfigured(env) {
 }
 
 async function sendVoicemailEmail(env, vm) {
-  // Voicemail notifications go only through Apps Script. Resend is wired up
-  // for magic links, and routing transcripts through a third party is a
-  // different decision than routing a sign-in link.
-  if (!env.GAS_WEBHOOK_URL) return;
-  return sendVoicemailEmailViaAppsScript(env, vm);
+  // Apps Script first when configured: it sends from your own Gmail, so
+  // transcripts never reach a third party. Resend is the fallback.
+  if (env.GAS_WEBHOOK_URL) return sendVoicemailEmailViaAppsScript(env, vm);
+  if (!env.RESEND_API_KEY) return; // email not configured; push still fires
+
+  const received = new Date(vm.receivedAt ? vm.receivedAt * 1000 : Date.now());
+  const transcript = vm.transcript || 'Transcript not available yet — open the app to listen.';
+  const appUrl = `${appBase(env)}/#/vm/${vm.id}`;
+
+  await sendViaResend(env, {
+    subject: `Voicemail from ${vm.fromLabel}`,
+    text: [
+      `${vm.fromLabel} left you a ${formatDuration(vm.duration)} voicemail.`,
+      '',
+      transcript,
+      '',
+      `Listen or manage: ${appUrl}`,
+    ].join('\n'),
+    html: voicemailHtml(vm.fromLabel, vm.duration, received, transcript, appUrl),
+  });
+}
+
+function voicemailHtml(label, duration, received, transcript, appUrl) {
+  const esc = (s) => String(s ?? '').replace(/[<>&"]/g, (c) => (
+    { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]
+  ));
+
+  return '' +
+    '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:560px">' +
+      '<div style="border-left:3px solid #16a34a;padding-left:16px;margin-bottom:20px">' +
+        `<div style="font-size:18px;font-weight:600">${esc(label)}</div>` +
+        `<div style="color:#666;font-size:13px">${formatDuration(duration)} &middot; ` +
+          `${esc(received.toLocaleString('en-US'))}</div>` +
+      '</div>' +
+      '<div style="background:#f6f8f6;border-radius:10px;padding:16px;line-height:1.6;' +
+        `font-size:15px;white-space:pre-wrap">${esc(transcript)}</div>` +
+      `<a href="${esc(appUrl)}" style="display:inline-block;margin-top:20px;background:#16a34a;` +
+        'color:#fff;padding:11px 22px;border-radius:8px;text-decoration:none;font-weight:600">' +
+        'Listen &amp; manage</a>' +
+    '</div>';
+}
+
+function formatDuration(seconds) {
+  const s = parseInt(seconds, 10) || 0;
+  if (s < 60) return `${s} second${s === 1 ? '' : 's'}`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 }
 
 async function sendVoicemailEmailViaAppsScript(env, vm) {
