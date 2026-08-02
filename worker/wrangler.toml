@@ -31,7 +31,7 @@ RP_NAME = "Mint Voicemail"
 # Transcription provider: assemblyai | groq | deepgram | openai | custom
 TRANSCRIBE_PROVIDER = "assemblyai"
 # AssemblyAI: comma-separated model fallback list, tried left to right.
-TRANSCRIBE_MODEL = "universal-3-pro,universal-2"
+TRANSCRIBE_MODEL = "universal-3-5-pro,universal-2"
 # Greeting callers hear before the beep.
 GREETING = "Hi, you've reached me. I can't take your call right now. Please leave a message after the tone."
 # Days a deleted voicemail stays recoverable in the trash before purge.

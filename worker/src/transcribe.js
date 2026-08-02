@@ -12,14 +12,14 @@
 
 const PROVIDERS = {
   /**
-   * AssemblyAI — the default, mirroring the settings already proven out on
-   * real voicemail: universal-3-pro with a universal-2 fallback, punctuation
-   * and text formatting on.
+   * AssemblyAI — the default, mirroring settings already proven on real
+   * voicemail: universal-3-5-pro with a universal-2 fallback, punctuation and
+   * text formatting on.
    *
-   * The SDK's `speech_models` fallback list is a client-side convenience; the
-   * REST API takes a single `speech_model`, so the fallback is done explicitly
-   * here. Workers can't use the Python SDK, so this is the raw three-step API:
-   * upload -> request transcript -> poll.
+   * `speech_models` is a genuine API parameter taking an ordered list, not an
+   * SDK convenience — AssemblyAI walks the list itself and the singular
+   * `speech_model` is deprecated. Workers can't run the Python SDK, so this is
+   * the raw API: upload -> request transcript -> poll.
    */
   async assemblyai(env, audio) {
     const key = env.TRANSCRIBE_API_KEY;
@@ -34,21 +34,11 @@ const PROVIDERS = {
     if (!upload.ok) throw new Error(`assemblyai upload ${upload.status}: ${await upload.text()}`);
     const { upload_url: audioUrl } = await upload.json();
 
-    // 2. Request transcription, walking the model list on failure.
-    const models = (env.TRANSCRIBE_MODEL || 'universal-3-pro,universal-2')
+    // 2. Transcribe, letting AssemblyAI handle model fallback.
+    const models = (env.TRANSCRIBE_MODEL || 'universal-3-5-pro,universal-2')
       .split(',').map((m) => m.trim()).filter(Boolean);
 
-    let lastError;
-    for (const model of models) {
-      try {
-        return await requestAssemblyAiTranscript(key, audioUrl, model, env);
-      } catch (e) {
-        lastError = e;
-        // Fall through to the next model. A model can be unavailable or
-        // rejected for this account without the audio being at fault.
-      }
-    }
-    throw lastError ?? new Error('assemblyai: no models configured');
+    return requestAssemblyAiTranscript(key, audioUrl, models, env);
   },
 
   /**
@@ -163,17 +153,22 @@ const PROVIDERS = {
  * so a stuck job can't hold the request open forever. On timeout the voicemail
  * stays 'pending' and the app's "Retry transcript" button re-runs it.
  */
-async function requestAssemblyAiTranscript(key, audioUrl, model, env) {
+async function requestAssemblyAiTranscript(key, audioUrl, models, env) {
+  const body = {
+    audio_url: audioUrl,
+    // Ordered preference list; AssemblyAI falls back down it automatically.
+    speech_models: models,
+    punctuate: true,
+    format_text: true,
+  };
+  // Left unset by default: the universal models auto-detect language, and
+  // pinning one can conflict with that.
+  if (env.TRANSCRIBE_LANGUAGE) body.language_code = env.TRANSCRIBE_LANGUAGE;
+
   const create = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: { authorization: key, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      audio_url: audioUrl,
-      speech_model: model,
-      punctuate: true,
-      format_text: true,
-      language_code: env.TRANSCRIBE_LANGUAGE || 'en_us',
-    }),
+    body: JSON.stringify(body),
   });
   if (!create.ok) throw new Error(`assemblyai create ${create.status}: ${await create.text()}`);
 
@@ -195,7 +190,8 @@ async function requestAssemblyAiTranscript(key, audioUrl, model, env) {
       return {
         text: (data.text || '').trim(),
         confidence: data.confidence ?? null,
-        provider: `assemblyai/${model}`,
+        // Report which model actually ran, not just what we asked for.
+        provider: `assemblyai/${data.speech_model || models[0]}`,
       };
     }
     if (data.status === 'error') throw new Error(`assemblyai: ${data.error}`);
