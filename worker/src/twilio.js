@@ -91,9 +91,16 @@ export async function handleVoice(req, env, params) {
   const base = new URL(req.url).origin;
   const maxLength = clampInt(env.MAX_RECORDING_SEC, 30, 600, 180);
 
+  // A recorded greeting wins over text-to-speech when one has been uploaded.
+  // Driven by config rather than an R2 lookup so the call path stays fast —
+  // a caller is on the line here.
+  const greeting = env.GREETING_AUDIO
+    ? `<Play>${base}/greeting.mp3</Play>`
+    : `<Say voice="Polly.Joanna-Neural">${escapeXml(env.GREETING || 'Please leave a message after the tone.')}</Say>`;
+
   return twiml(
     `<Response>` +
-      `<Say voice="Polly.Joanna-Neural">${escapeXml(env.GREETING || 'Please leave a message after the tone.')}</Say>` +
+      greeting +
       `<Record ` +
         `maxLength="${maxLength}" ` +
         `timeout="5" ` +
