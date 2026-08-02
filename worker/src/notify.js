@@ -59,7 +59,48 @@ async function callAppsScript(env, payload) {
   if (!res.ok) throw new Error(`apps script ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
+/**
+ * Resend — an alternative to Apps Script that needs only an API key, so it can
+ * be configured without a browser OAuth consent flow.
+ *
+ * Apps Script is still the better choice when you want voicemail *notifications*
+ * by email, since those carry transcripts and Apps Script keeps them inside your
+ * own Gmail. For magic links alone nothing sensitive transits: the mail says
+ * "here is a sign-in link", the token is single-use and expires in 15 minutes.
+ */
+async function sendViaResend(env, { subject, text, html }) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: env.RESEND_FROM || 'Voicemail <onboarding@resend.dev>',
+      to: [env.OWNER_EMAIL],
+      subject,
+      text,
+      html,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`resend ${res.status}: ${(await res.text()).slice(0, 200)}`);
+}
+
+/** True when some email transport is configured. */
+function emailConfigured(env) {
+  return !!env.RESEND_API_KEY || !!(env.GAS_WEBHOOK_URL && env.GAS_SHARED_SECRET);
+}
+
 async function sendVoicemailEmail(env, vm) {
+  // Voicemail notifications go only through Apps Script. Resend is wired up
+  // for magic links, and routing transcripts through a third party is a
+  // different decision than routing a sign-in link.
+  if (!env.GAS_WEBHOOK_URL) return;
+  return sendVoicemailEmailViaAppsScript(env, vm);
+}
+
+async function sendVoicemailEmailViaAppsScript(env, vm) {
   await callAppsScript(env, {
     kind: 'voicemail',
     id: vm.id,
@@ -73,18 +114,62 @@ async function sendVoicemailEmail(env, vm) {
 }
 
 export async function sendMagicLink(env, link, req) {
+  const ip = req?.headers.get('CF-Connecting-IP') || 'unknown';
+  const userAgent = req?.headers.get('User-Agent') || 'unknown';
+
+  if (!emailConfigured(env)) {
+    // Loud in the audit log: this is a failsafe, and silently having no way to
+    // deliver it is exactly the failure you find out about when locked out.
+    await audit(env.DB, 'magic_link_no_transport', null, req);
+    throw new Error('No email transport configured');
+  }
+
   try {
-    await callAppsScript(env, {
-      kind: 'magic',
-      link,
-      ip: req?.headers.get('CF-Connecting-IP') || 'unknown',
-      userAgent: req?.headers.get('User-Agent') || 'unknown',
-      expiresInMinutes: 15,
-    });
+    if (env.RESEND_API_KEY) {
+      await sendViaResend(env, {
+        subject: 'Your Voicemail sign-in link',
+        text: [
+          'Here is your sign-in link for Voicemail:',
+          '',
+          link,
+          '',
+          'It expires in 15 minutes and can be used once.',
+          '',
+          `Requested from IP ${ip}`,
+          `Device: ${userAgent}`,
+          '',
+          "If you didn't request this, ignore this email. The link is useless",
+          'without access to this inbox, and nobody else can trigger one.',
+        ].join('\n'),
+        html: magicLinkHtml(link, ip, userAgent),
+      });
+    } else {
+      await callAppsScript(env, {
+        kind: 'magic', link, ip, userAgent, expiresInMinutes: 15,
+      });
+    }
   } catch (e) {
     await audit(env.DB, 'magic_link_send_failed', String(e), req);
     throw e;
   }
+}
+
+function magicLinkHtml(link, ip, userAgent) {
+  const esc = (s) => String(s).replace(/[<>&"]/g, (c) => (
+    { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]
+  ));
+
+  return '' +
+    '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:480px">' +
+      '<h2 style="margin:0 0 16px">Sign in to Voicemail</h2>' +
+      '<p style="margin:0 0 24px;color:#444">Tap the button below. It expires in 15 minutes and works once.</p>' +
+      `<a href="${esc(link)}" style="display:inline-block;background:#16a34a;color:#fff;` +
+        'padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Sign in</a>' +
+      `<p style="margin:24px 0 0;font-size:12px;color:#888">Requested from ${esc(ip)}<br>` +
+        `${esc(userAgent.slice(0, 120))}</p>` +
+      '<p style="margin:16px 0 0;font-size:12px;color:#888">' +
+        "If this wasn't you, you can ignore it safely.</p>" +
+    '</div>';
 }
 
 /* ------------------------------------------------------------------ */
