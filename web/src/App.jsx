@@ -4,6 +4,7 @@ import Login from './components/Login.jsx';
 import Inbox from './components/Inbox.jsx';
 import Settings from './components/Settings.jsx';
 import RecoveryCodes from './components/RecoveryCodes.jsx';
+import DialogHost, { dialogs } from './components/Dialog.jsx';
 
 // Hash routing: GitHub Pages has no server-side rewrites, so deep links must
 // live after the '#'.
@@ -53,7 +54,7 @@ export default function App() {
         refresh();
       } catch (e) {
         window.location.hash = '#/';
-        alert(e.message);
+        dialogs.alert(e.message, { title: 'Sign-in failed' });
       }
     })();
   }, [hash, refresh]);
@@ -70,22 +71,33 @@ export default function App() {
     setState((s) => ({ ...s, authed: false }));
   }, []);
 
+  // DialogHost renders above everything, including the signed-out screens,
+  // so dialogs work on every route.
+  const withDialogs = (content) => (
+    <>
+      {content}
+      <DialogHost />
+    </>
+  );
+
   if (state.loading) {
-    return <div className="center muted">Loading…</div>;
+    return withDialogs(<div className="center muted">Loading…</div>);
   }
 
   // Shown once, immediately after the first passkey is created.
   if (freshCodes) {
-    return <RecoveryCodes codes={freshCodes} onDone={() => setFreshCodes(null)} />;
+    return withDialogs(
+      <RecoveryCodes codes={freshCodes} onDone={() => setFreshCodes(null)} />,
+    );
   }
 
   if (!state.authed || !getToken()) {
-    return <Login enrolled={state.enrolled} onSignedIn={onSignedIn} />;
+    return withDialogs(<Login enrolled={state.enrolled} onSignedIn={onSignedIn} />);
   }
 
   const route = hash.replace(/^#/, '').split('?')[0];
 
-  return (
+  return withDialogs(
     <div className="app">
       <header className="topbar">
         <a href="#/" className="brand">
@@ -104,6 +116,6 @@ export default function App() {
           ? <Settings onSignOut={onSignOut} />
           : <Inbox route={route} />}
       </main>
-    </div>
+    </div>,
   );
 }

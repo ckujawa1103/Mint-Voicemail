@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../api.js';
+import { dialogs } from './Dialog.jsx';
 
 const FILTERS = [
   { key: 'inbox',  label: 'Inbox' },
@@ -73,7 +74,10 @@ export default function Inbox({ route }) {
 
   const remove = async (vm) => {
     const permanent = filter === 'trash';
-    if (permanent && !confirm('Delete this voicemail permanently? This cannot be undone.')) return;
+    if (permanent && !(await dialogs.confirm(
+      'Delete this voicemail permanently? This cannot be undone.',
+      { title: 'Delete forever', confirmLabel: 'Delete', danger: true },
+    ))) return;
     setItems((prev) => prev.filter((v) => v.id !== vm.id));
     try { await api.remove(vm.id, permanent); await load(); }
     catch (e) { setError(e.message); load(); }
