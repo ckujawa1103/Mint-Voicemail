@@ -3,6 +3,7 @@ import { startRegistration } from '@simplewebauthn/browser';
 import { api } from '../api.js';
 import { pushSupported, currentSubscription, enablePush, disablePush } from '../push.js';
 import RecoveryCodes from './RecoveryCodes.jsx';
+import { dialogs } from './Dialog.jsx';
 
 export default function Settings() {
   const [creds, setCreds] = useState([]);
@@ -39,7 +40,10 @@ export default function Settings() {
   const addPasskey = () => run(async () => {
     const { options, challengeId } = await api.registerOptions({});
     const response = await startRegistration({ optionsJSON: options });
-    await api.registerVerify({ challengeId, response, label: prompt('Name this device:') || 'Passkey' });
+    const label = await dialogs.prompt('Name this device', deviceGuess(), {
+      title: 'Add a passkey', confirmLabel: 'Save', placeholder: 'e.g. Laptop',
+    });
+    await api.registerVerify({ challengeId, response, label: label || 'Passkey' });
   });
 
   const togglePush = () => run(async () => {
@@ -116,7 +120,10 @@ export default function Settings() {
           className="ghost"
           disabled={busy}
           onClick={() => run(async () => {
-            if (!confirm('Generate new codes? Your existing codes stop working immediately.')) return;
+            if (!(await dialogs.confirm(
+              'Generate new codes? Your existing codes stop working immediately.',
+              { title: 'New recovery codes', confirmLabel: 'Generate', danger: true },
+            ))) return;
             const r = await api.recoveryRegenerate();
             setNewCodes(r.recoveryCodes);
           })}
@@ -167,6 +174,15 @@ export default function Settings() {
       </section>
     </div>
   );
+}
+
+function deviceGuess() {
+  const ua = navigator.userAgent;
+  if (/Android/.test(ua)) return 'Android phone';
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/Macintosh/.test(ua)) return 'Mac';
+  if (/Windows/.test(ua)) return 'Windows PC';
+  return 'Passkey';
 }
 
 function shortUa(ua) {
