@@ -310,6 +310,18 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .vm-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .vm-actions button, .vm-actions a { padding: 7px 13px; font-size: 13px; }
 
+/* Replying is the point of reading a voicemail, so these lead the row. */
+.reply {
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-block;
+}
+.reply:hover { background: var(--accent-dim); }
+
 .empty { text-align: center; padding: 56px 24px; color: var(--muted); }
 
 /* ---------- settings ---------- */

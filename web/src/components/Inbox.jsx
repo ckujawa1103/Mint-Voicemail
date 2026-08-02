@@ -219,6 +219,15 @@ function VoicemailCard({
               </>
             ) : (
               <>
+                {canReply(vm.from) && (
+                  <>
+                    {/* tel:/sms: hand off to the phone's own dialer and
+                        messaging app, so replying is one tap from the
+                        transcript instead of copying the number out. */}
+                    <a className="reply" href={`tel:${vm.from}`}>Call back</a>
+                    <a className="reply" href={`sms:${vm.from}`}>Text back</a>
+                  </>
+                )}
                 <button className="ghost" onClick={onToggleSaved}>
                   {vm.isSaved ? '★ Saved' : '☆ Save'}
                 </button>
@@ -245,6 +254,15 @@ function VoicemailCard({
       )}
     </li>
   );
+}
+
+/**
+ * Withheld, blocked, and anonymous callers arrive as things like "unknown"
+ * or "anonymous" rather than a number. Offering a dial button for those just
+ * launches the dialer with garbage in it.
+ */
+function canReply(from) {
+  return typeof from === 'string' && /^\+?\d{7,15}$/.test(from.replace(/[\s()-]/g, ''));
 }
 
 function emptyMessage(filter) {
