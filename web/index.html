@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Voicemail</title>
+    <meta name="description" content="Private voicemail inbox with transcripts." />
+
+    <!--
+      The session token lives in localStorage, so script injection is the threat
+      that matters. Scripts are restricted to same-origin only and there are no
+      third-party scripts in this app at all.
+
+      connect-src allows https: because the Worker's hostname differs per
+      install. If you want it tighter, replace `https:` with your exact Worker
+      origin once you know it.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self';
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data:;
+               media-src 'self' https: blob:;
+               connect-src 'self' https:;
+               frame-ancestors 'none';
+               base-uri 'self';
+               form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+
+    <meta name="theme-color" content="#16a34a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Voicemail" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

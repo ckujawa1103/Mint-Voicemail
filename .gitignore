@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+.env.*
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Never commit these: recovery codes, keys, transcripts
+recovery-codes*.txt
+voicemail-recovery-codes.txt
+*.pem

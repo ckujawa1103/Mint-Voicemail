@@ -1,0 +1,49 @@
+name = "mint-voicemail"
+main = "src/index.js"
+compatibility_date = "2026-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Metadata: callers, transcripts, sessions, passkeys, recovery codes.
+[[d1_databases]]
+binding = "DB"
+database_name = "mint-voicemail"
+database_id = "f49b3a24-a26a-410f-8e41-354288af13f1"
+
+# Audio blobs. R2 has no egress fees, so streaming voicemail is free.
+[[r2_buckets]]
+binding = "AUDIO"
+bucket_name = "mint-voicemail-audio"
+
+# Nightly housekeeping: expire sessions/challenges, purge aged trash.
+[triggers]
+crons = ["17 4 * * *"]
+
+[vars]
+# Bare origin, no path. CORS and WebAuthn both require exactly this form.
+APP_ORIGIN = "https://ckujawa1103.github.io"
+# Full URL the app is actually served from, including the GitHub Pages
+# subdirectory. Links we email or push must use this, not APP_ORIGIN, or they
+# land on the domain root instead of the app.
+APP_BASE_URL = "https://ckujawa1103.github.io/Mint-Voicemail"
+# WebAuthn Relying Party ID: the registrable domain of APP_ORIGIN, no scheme/port.
+RP_ID = "ckujawa1103.github.io"
+RP_NAME = "Mint Voicemail"
+# Transcription provider: assemblyai | groq | deepgram | openai | custom
+TRANSCRIBE_PROVIDER = "assemblyai"
+# AssemblyAI: comma-separated model fallback list, tried left to right.
+TRANSCRIBE_MODEL = "universal-3-pro,universal-2"
+# Greeting callers hear before the beep.
+GREETING = "Hi, you've reached me. I can't take your call right now. Please leave a message after the tone."
+# Days a deleted voicemail stays recoverable in the trash before purge.
+TRASH_RETENTION_DAYS = "30"
+
+# Secrets — set with `wrangler secret put <NAME>`, never in this file:
+#   TWILIO_AUTH_TOKEN     - verifies webhook signatures (required)
+#   TWILIO_ACCOUNT_SID    - for fetching recordings (required)
+#   OWNER_EMAIL           - the single allowlisted address (required)
+#   SESSION_SECRET        - random 32+ bytes, signs session tokens (required)
+#   TRANSCRIBE_API_KEY    - key for whichever provider is selected
+#   GAS_WEBHOOK_URL       - Apps Script deployment URL for Gmail sending
+#   GAS_SHARED_SECRET     - authenticates Worker -> Apps Script calls
+#   VAPID_PUBLIC_KEY      - web push
+#   VAPID_PRIVATE_KEY     - web push

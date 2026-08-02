@@ -1,0 +1,65 @@
+name: Deploy web app to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['web/**', '.github/workflows/deploy.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish; queue at most one behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build
+        working-directory: web
+        env:
+          # The deployed Worker. Not a secret — it's a public endpoint, and
+          # every request to it is authenticated separately.
+          #
+          # The defaults below are this project's live values, so the build
+          # works with no repository configuration at all. To point the app at
+          # a different backend, set the matching repository variable under
+          # Settings > Secrets and variables > Actions > Variables; it wins.
+          VITE_API_BASE: ${{ vars.VITE_API_BASE || 'https://mint-voicemail.ckujawa1103.workers.dev' }}
+          # GitHub Pages serves project sites from /<repo>/. Set to "/" for a
+          # custom domain or a <user>.github.io repository.
+          BASE_PATH: ${{ vars.BASE_PATH || '/Mint-Voicemail/' }}
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
