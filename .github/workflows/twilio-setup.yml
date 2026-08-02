@@ -1,0 +1,93 @@
+name: Twilio setup
+
+# Runs the Twilio setup scripts from GitHub instead of your own terminal —
+# useful if you don't have Node installed, or you're on a phone.
+#
+# Credentials live in repo secrets (encrypted, masked in logs), never in this
+# file and never in chat.
+#
+# One-time setup, all from a browser:
+#   Settings > Secrets and variables > Actions > New repository secret
+#
+#   Required for every action:
+#     TWILIO_ACCOUNT_SID     starts with AC
+#     TWILIO_AUTH_TOKEN
+#
+#   Required for create-profile:
+#     PROFILE_FIRST_NAME     as on your government ID
+#     PROFILE_LAST_NAME
+#     PROFILE_EMAIL
+#     PROFILE_PHONE          E.164, e.g. +16315551234
+#     PROFILE_STREET         your real home address — Twilio verifies it
+#     PROFILE_CITY
+#     PROFILE_REGION         two-letter state, e.g. IL
+#     PROFILE_POSTAL_CODE
+#
+#   Required for buy-number:
+#     WORKER_URL             https://mint-voicemail.<you>.workers.dev
+#
+# Then: Actions > Twilio setup > Run workflow > pick an action.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        required: true
+        default: dry-run-profile
+        type: choice
+        options:
+          - dry-run-profile   # show what the profile call would send, create nothing
+          - create-profile    # create + submit the Trust Hub starter profile
+          - dry-run-number    # search for numbers, buy nothing
+          - buy-number        # buy the number and attach the voice webhook
+      area_code:
+        description: Preferred area code for buy-number (optional)
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check required secrets
+        env:
+          SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+        run: |
+          if [ -z "$SID" ] || [ -z "$TOKEN" ]; then
+            echo "::error::Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in repo secrets first."
+            exit 1
+          fi
+
+      - name: Create Trust Hub profile
+        if: startsWith(inputs.action, 'dry-run-profile') || inputs.action == 'create-profile'
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          FIRST_NAME: ${{ secrets.PROFILE_FIRST_NAME }}
+          LAST_NAME: ${{ secrets.PROFILE_LAST_NAME }}
+          EMAIL: ${{ secrets.PROFILE_EMAIL }}
+          PHONE: ${{ secrets.PROFILE_PHONE }}
+          STREET: ${{ secrets.PROFILE_STREET }}
+          CITY: ${{ secrets.PROFILE_CITY }}
+          REGION: ${{ secrets.PROFILE_REGION }}
+          POSTAL_CODE: ${{ secrets.PROFILE_POSTAL_CODE }}
+          DRY_RUN: ${{ inputs.action == 'dry-run-profile' && '1' || '' }}
+        run: node scripts/setup-twilio-profile.mjs
+
+      - name: Buy and configure number
+        if: startsWith(inputs.action, 'dry-run-number') || inputs.action == 'buy-number'
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          AREA_CODE: ${{ inputs.area_code }}
+          DRY_RUN: ${{ inputs.action == 'dry-run-number' && '1' || '' }}
+        run: node scripts/setup-twilio.mjs
