@@ -324,7 +324,10 @@ export async function handleAuth(req, env, path, ctx) {
           'INSERT INTO challenges (id, kind, value, expires_at) VALUES (?, ?, ?, ?)',
         ).bind(randomToken(8), 'magic', await sha256(token), now() + MAGIC_TTL).run();
 
-        const link = `${env.APP_ORIGIN}/#/magic?token=${encodeURIComponent(token)}`;
+        // APP_BASE_URL, not APP_ORIGIN — the app lives under a subdirectory on
+        // GitHub Pages, and a link to the bare origin would 404.
+        const base = (env.APP_BASE_URL || env.APP_ORIGIN).replace(/\/+$/, '');
+        const link = `${base}/#/magic?token=${encodeURIComponent(token)}`;
         ctx.waitUntil(sendMagicLink(env, link, req));
         await audit(env.DB, 'magic_link_sent', null, req);
       } else {

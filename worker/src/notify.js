@@ -6,6 +6,18 @@
 
 import { b64urlEncode, b64urlDecode, randomBytes, now, audit, formatPhone } from './util.js';
 
+/**
+ * Where the app actually lives, including any subdirectory.
+ *
+ * APP_ORIGIN is the bare origin because CORS and WebAuthn require that exact
+ * form. Links we send a human need the full path — on GitHub Pages the app
+ * sits under /<repo>/, so building links from the origin alone would drop
+ * people on the domain root.
+ */
+function appBase(env) {
+  return (env.APP_BASE_URL || env.APP_ORIGIN || '').replace(/\/+$/, '');
+}
+
 /* ------------------------------------------------------------------ */
 /* Fan-out                                                             */
 /* ------------------------------------------------------------------ */
@@ -18,7 +30,7 @@ export async function notifyNewVoicemail(env, vm) {
         ? vm.transcript.slice(0, 180)
         : `${vm.duration}s message — transcript pending`,
       tag: `vm-${vm.id}`,
-      url: `${env.APP_ORIGIN}/#/vm/${vm.id}`,
+      url: `${appBase(env)}/#/vm/${vm.id}`,
     }),
     sendVoicemailEmail(env, vm),
   ]);
@@ -55,7 +67,7 @@ async function sendVoicemailEmail(env, vm) {
     fromLabel: vm.fromLabel,
     duration: vm.duration,
     transcript: vm.transcript,
-    appUrl: `${env.APP_ORIGIN}/#/vm/${vm.id}`,
+    appUrl: `${appBase(env)}/#/vm/${vm.id}`,
     receivedAt: now(),
   });
 }

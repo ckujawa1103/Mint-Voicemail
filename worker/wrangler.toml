@@ -7,7 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "mint-voicemail"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "f49b3a24-a26a-410f-8e41-354288af13f1"
 
 # Audio blobs. R2 has no egress fees, so streaming voicemail is free.
 [[r2_buckets]]
@@ -19,10 +19,14 @@ bucket_name = "mint-voicemail-audio"
 crons = ["17 4 * * *"]
 
 [vars]
-# Where the web app is served from. Used for CORS + WebAuthn origin checks.
-APP_ORIGIN = "https://REPLACE_ME.github.io"
+# Bare origin, no path. CORS and WebAuthn both require exactly this form.
+APP_ORIGIN = "https://ckujawa1103.github.io"
+# Full URL the app is actually served from, including the GitHub Pages
+# subdirectory. Links we email or push must use this, not APP_ORIGIN, or they
+# land on the domain root instead of the app.
+APP_BASE_URL = "https://ckujawa1103.github.io/Mint-Voicemail"
 # WebAuthn Relying Party ID: the registrable domain of APP_ORIGIN, no scheme/port.
-RP_ID = "REPLACE_ME.github.io"
+RP_ID = "ckujawa1103.github.io"
 RP_NAME = "Mint Voicemail"
 # Transcription provider: assemblyai | groq | deepgram | openai | custom
 TRANSCRIBE_PROVIDER = "assemblyai"
