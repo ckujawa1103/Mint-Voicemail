@@ -210,6 +210,12 @@ truly clean Twilio account can't complete in one pass regardless.
 
 ## Open items
 
+`.github/workflows/deploy-worker.yml` runs `wrangler deploy` against the
+committed `worker/wrangler.toml`. Once `npm run setup` regenerates that file
+from the template it gains an `[assets]` block pointing at `../web/dist`, and
+the workflow doesn't build the web app — so it would need a build step added
+before that workflow and this branch's single-origin config are used together.
+
 The live install still runs on GitHub Pages. Nothing about it changed here, and
 the Pages workflow only fires on pushes touching `web/**`, so merging the
 installer doesn't disturb it. Moving the live system onto the single origin
