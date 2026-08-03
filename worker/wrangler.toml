@@ -50,3 +50,7 @@ TRASH_RETENTION_DAYS = "30"
 #   GAS_SHARED_SECRET     - authenticates Worker -> Apps Script calls
 #   VAPID_PUBLIC_KEY      - web push
 #   VAPID_PRIVATE_KEY     - web push
+#   N8N_WEBHOOK_URL       - home automation webhook, fired on each new
+#                           voicemail; unset to disable that fan-out entirely
+#   N8N_WEBHOOK_SECRET    - sent as X-Automation-Secret, must match the n8n
+#                           Header Auth credential on the receiving node

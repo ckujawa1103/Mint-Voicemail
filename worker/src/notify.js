@@ -33,11 +33,54 @@ export async function notifyNewVoicemail(env, vm) {
       url: `${appBase(env)}/#/vm/${vm.id}`,
     }),
     sendVoicemailEmail(env, vm),
+    sendToAutomation(env, vm),
   ]);
 
   for (const r of results) {
     if (r.status === 'rejected') await audit(env.DB, 'notify_failed', String(r.reason));
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Home automation                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Hand the voicemail to a webhook so a home automation stack can react to it —
+ * announce it on a speaker, flash a lamp, page you differently when the caller
+ * is on a short list.
+ *
+ * Deliberately fire-and-forget in spirit: unset either secret and this is a
+ * no-op, so push and email are never held hostage to a self-hosted box being
+ * up. The timeout matters more here than for the other legs — a home server
+ * behind a residential connection can accept a TCP connection and then simply
+ * stop, and without a bound this would pin the Worker invocation until the
+ * platform killed it.
+ */
+async function sendToAutomation(env, vm) {
+  if (!env.N8N_WEBHOOK_URL || !env.N8N_WEBHOOK_SECRET) return; // not configured
+
+  const res = await fetch(env.N8N_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      // Matches a Header Auth credential on the n8n webhook node. The
+      // endpoint is on the public internet, so it needs to reject strangers.
+      'X-Automation-Secret': env.N8N_WEBHOOK_SECRET,
+    },
+    body: JSON.stringify({
+      id: vm.id,
+      from: vm.from,
+      fromLabel: vm.fromLabel,
+      duration: vm.duration,
+      transcript: vm.transcript,
+      appUrl: `${appBase(env)}/#/vm/${vm.id}`,
+      receivedAt: now(),
+    }),
+    signal: AbortSignal.timeout(5000),
+  });
+
+  if (!res.ok) throw new Error(`automation ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
 /* ------------------------------------------------------------------ */
