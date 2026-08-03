@@ -272,6 +272,15 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 .search { margin: 0; }
 
+.trash-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .vm-list { list-style: none; margin: 0; padding: 0; }
 
 .vm {

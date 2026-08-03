@@ -79,6 +79,7 @@ export const api = {
   remove: (id, permanent = false) =>
     request(`/api/voicemails/${id}${permanent ? '?permanent=1' : ''}`, { method: 'DELETE' }),
   restore: (id) => request(`/api/voicemails/${id}/restore`, { method: 'POST', body: {} }),
+  emptyTrash: () => request('/api/trash', { method: 'DELETE' }),
   retranscribe: (id) => request(`/api/voicemails/${id}/retranscribe`, { method: 'POST', body: {} }),
   stats: () => request('/api/stats'),
 
