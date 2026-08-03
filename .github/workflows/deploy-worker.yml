@@ -1,0 +1,72 @@
+name: Deploy Worker
+
+# Deploys worker/ to Cloudflare from GitHub instead of your own terminal.
+#
+# The web app deploys itself on every push to main (see deploy.yml), but the
+# Worker does not — it holds the database, the storage bindings, and every
+# secret, so it deploys only when you ask for it.
+#
+# One-time setup, all from a browser:
+#   Settings > Secrets and variables > Actions > New repository secret
+#
+#     CLOUDFLARE_API_TOKEN   dash.cloudflare.com/profile/api-tokens
+#                            "Edit Cloudflare Workers" template, plus a
+#                            D1:Edit row
+#     CLOUDFLARE_ACCOUNT_ID  on the right of the Workers dashboard
+#
+# Then: Actions > Deploy Worker > Run workflow.
+#
+# This deploys the code and the [vars] in wrangler.toml. It does not touch
+# secrets already stored in Cloudflare — those stay exactly as they are.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and validate without deploying
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never let two deploys of the same Worker overlap.
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Check the token is configured
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set. See the comment at the top of this workflow."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Test
+        working-directory: worker
+        run: npm test
+
+      - name: Deploy
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy ${{ inputs.dry_run && '--dry-run' || '' }}
