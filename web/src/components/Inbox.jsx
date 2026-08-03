@@ -90,15 +90,18 @@ export default function Inbox({ route }) {
     catch (e) { setError(e.message); load(); }
   };
 
+  // Counts come from stats rather than the visible list, because a search can
+  // hide trashed messages that emptying would still delete.
+  const trashedSaved = stats.trashedSaved ?? 0;
+  const emptyable = (stats.trashed ?? 0) - trashedSaved;
+
   const emptyTrash = async () => {
-    // Counts come from stats, not the visible list: emptying the trash empties
-    // all of it, including anything a search is currently hiding.
-    const n = stats.trashed ?? items.length;
-    const saved = stats.trashedSaved ?? 0;
     const confirmed = await dialogs.confirm(
-      `Permanently delete ${n === 1 ? 'the 1 voicemail' : `all ${n} voicemails`} in the trash, ` +
-      `audio included? This cannot be undone.` +
-      (saved ? ` ${saved === 1 ? 'One of them is' : `${saved} of them are`} saved.` : ''),
+      `Permanently delete ${emptyable === 1 ? 'the 1 voicemail' : `all ${emptyable} voicemails`} ` +
+      'in the trash, audio included? This cannot be undone.' +
+      (trashedSaved
+        ? ` ${trashedSaved === 1 ? 'One saved message stays' : `${trashedSaved} saved messages stay`} in the trash.`
+        : ''),
       { title: 'Empty trash', confirmLabel: 'Empty trash', danger: true },
     );
     if (!confirmed) return;
@@ -137,12 +140,15 @@ export default function Inbox({ route }) {
         {filter === 'trash' && stats.trashed > 0 && (
           <div className="trash-actions">
             <span className="muted small">
-              {stats.trashed === 1 ? '1 voicemail in the trash' : `${stats.trashed} voicemails in the trash`}
+              {emptyable === 1 ? '1 voicemail' : `${emptyable} voicemails`} can be cleared
+              {trashedSaved > 0 && `, ${trashedSaved} saved ${trashedSaved === 1 ? 'one is' : 'ones are'} kept`}
               {stats.retentionDays ? ` · unsaved ones auto-delete after ${stats.retentionDays} days` : ''}
             </span>
-            <button className="danger small" onClick={emptyTrash} disabled={emptying}>
-              {emptying ? 'Emptying…' : 'Empty trash'}
-            </button>
+            {emptyable > 0 && (
+              <button className="danger small" onClick={emptyTrash} disabled={emptying}>
+                {emptying ? 'Emptying…' : 'Empty trash'}
+              </button>
+            )}
           </div>
         )}
       </div>

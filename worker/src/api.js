@@ -74,13 +74,13 @@ export async function handleApi(req, env, path, ctx) {
     return json({ voicemails: items }, opts);
   }
 
-  // Empty the trash outright, rather than deleting one at a time or waiting
-  // out TRASH_RETENTION_DAYS. Unlike the nightly purge this takes saved
-  // messages too: they're in the trash because they were deleted, and an
-  // "empty trash" that leaves things in the trash is a lie.
+  // Empty the trash in one go, rather than deleting one at a time or waiting
+  // out TRASH_RETENTION_DAYS. Scoped exactly like the nightly purge — trashed
+  // and not saved — so it can only ever touch what is already in the trash,
+  // and a saved message that was deleted still has to be deleted deliberately.
   if (path === '/api/trash' && req.method === 'DELETE') {
     const rows = await env.DB.prepare(
-      'SELECT id, r2_key FROM voicemails WHERE deleted_at IS NOT NULL',
+      'SELECT id, r2_key FROM voicemails WHERE deleted_at IS NOT NULL AND is_saved = 0',
     ).all();
     const doomed = rows.results || [];
 
@@ -91,7 +91,9 @@ export async function handleApi(req, env, path, ctx) {
       await env.AUDIO.delete(keys.slice(i, i + 1000)); // R2 caps a batch at 1000
     }
 
-    await env.DB.prepare('DELETE FROM voicemails WHERE deleted_at IS NOT NULL').run();
+    await env.DB.prepare(
+      'DELETE FROM voicemails WHERE deleted_at IS NOT NULL AND is_saved = 0',
+    ).run();
     if (doomed.length) await audit(env.DB, 'trash_emptied', { count: doomed.length }, req);
 
     return json({ ok: true, deleted: doomed.length }, opts);
