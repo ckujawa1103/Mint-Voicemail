@@ -95,6 +95,13 @@ export default function Inbox({ route }) {
   const trashedSaved = stats.trashedSaved ?? 0;
   const emptyable = (stats.trashed ?? 0) - trashedSaved;
 
+  // The app and the Worker deploy separately, so the app can be newer. Only
+  // offer the button once the Worker's own response says it has the endpoint —
+  // retentionDays ships in the same change. Otherwise the button would be
+  // there to press and answer 404, and it starts working on its own the moment
+  // the Worker catches up.
+  const canEmptyTrash = stats.retentionDays != null;
+
   const emptyTrash = async () => {
     const confirmed = await dialogs.confirm(
       `Permanently delete ${emptyable === 1 ? 'the 1 voicemail' : `all ${emptyable} voicemails`} ` +
@@ -137,7 +144,7 @@ export default function Inbox({ route }) {
           onChange={(e) => setRawQuery(e.target.value)}
         />
 
-        {filter === 'trash' && stats.trashed > 0 && (
+        {filter === 'trash' && stats.trashed > 0 && canEmptyTrash && (
           <div className="trash-actions">
             <span className="muted small">
               {emptyable === 1 ? '1 voicemail' : `${emptyable} voicemails`} can be cleared
