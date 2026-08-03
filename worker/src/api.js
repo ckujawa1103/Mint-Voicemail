@@ -74,16 +74,44 @@ export async function handleApi(req, env, path, ctx) {
     return json({ voicemails: items }, opts);
   }
 
+  // Empty the trash in one go, rather than deleting one at a time or waiting
+  // out TRASH_RETENTION_DAYS. Scoped exactly like the nightly purge — trashed
+  // and not saved — so it can only ever touch what is already in the trash,
+  // and a saved message that was deleted still has to be deleted deliberately.
+  if (path === '/api/trash' && req.method === 'DELETE') {
+    const rows = await env.DB.prepare(
+      'SELECT id, r2_key FROM voicemails WHERE deleted_at IS NOT NULL AND is_saved = 0',
+    ).all();
+    const doomed = rows.results || [];
+
+    // Audio first: a failure here leaves the rows in place to try again,
+    // where the reverse would strand unreachable objects in R2 forever.
+    const keys = doomed.map((r) => r.r2_key).filter(Boolean);
+    for (let i = 0; i < keys.length; i += 1000) {
+      await env.AUDIO.delete(keys.slice(i, i + 1000)); // R2 caps a batch at 1000
+    }
+
+    await env.DB.prepare(
+      'DELETE FROM voicemails WHERE deleted_at IS NOT NULL AND is_saved = 0',
+    ).run();
+    if (doomed.length) await audit(env.DB, 'trash_emptied', { count: doomed.length }, req);
+
+    return json({ ok: true, deleted: doomed.length }, opts);
+  }
+
   if (path === '/api/stats' && req.method === 'GET') {
     const row = await env.DB.prepare(
       `SELECT
          COUNT(*) FILTER (WHERE deleted_at IS NULL)                  AS total,
          COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_read = 0)  AS unread,
          COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_saved = 1) AS saved,
-         COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)              AS trashed
+         COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)              AS trashed,
+         COUNT(*) FILTER (WHERE deleted_at IS NOT NULL AND is_saved = 1) AS trashedSaved
        FROM voicemails`,
     ).first();
-    return json(row ?? {}, opts);
+    // Retention travels with the stats so the trash can state its own rule
+    // instead of the app hardcoding a number the Worker config can change.
+    return json({ ...(row ?? {}), retentionDays: clampInt(env.TRASH_RETENTION_DAYS, 1, 3650, 30) }, opts);
   }
 
   /* ---- single item ---- */

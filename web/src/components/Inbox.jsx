@@ -17,6 +17,7 @@ export default function Inbox({ route }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [openId, setOpenId] = useState(null);
+  const [emptying, setEmptying] = useState(false);
 
   // Deep link from a push notification or email: #/vm/<id>
   useEffect(() => {
@@ -89,6 +90,28 @@ export default function Inbox({ route }) {
     catch (e) { setError(e.message); load(); }
   };
 
+  // Counts come from stats rather than the visible list, because a search can
+  // hide trashed messages that emptying would still delete.
+  const trashedSaved = stats.trashedSaved ?? 0;
+  const emptyable = (stats.trashed ?? 0) - trashedSaved;
+
+  const emptyTrash = async () => {
+    const confirmed = await dialogs.confirm(
+      `Permanently delete ${emptyable === 1 ? 'the 1 voicemail' : `all ${emptyable} voicemails`} ` +
+      'in the trash, audio included? This cannot be undone.' +
+      (trashedSaved
+        ? ` ${trashedSaved === 1 ? 'One saved message stays' : `${trashedSaved} saved messages stay`} in the trash.`
+        : ''),
+      { title: 'Empty trash', confirmLabel: 'Empty trash', danger: true },
+    );
+    if (!confirmed) return;
+
+    setEmptying(true);
+    try { await api.emptyTrash(); await load(); }
+    catch (e) { setError(e.message); load(); }
+    finally { setEmptying(false); }
+  };
+
   return (
     <div className="inbox">
       <div className="toolbar">
@@ -113,6 +136,21 @@ export default function Inbox({ route }) {
           value={rawQuery}
           onChange={(e) => setRawQuery(e.target.value)}
         />
+
+        {filter === 'trash' && stats.trashed > 0 && (
+          <div className="trash-actions">
+            <span className="muted small">
+              {emptyable === 1 ? '1 voicemail' : `${emptyable} voicemails`} can be cleared
+              {trashedSaved > 0 && `, ${trashedSaved} saved ${trashedSaved === 1 ? 'one is' : 'ones are'} kept`}
+              {stats.retentionDays ? ` · unsaved ones auto-delete after ${stats.retentionDays} days` : ''}
+            </span>
+            {emptyable > 0 && (
+              <button className="danger small" onClick={emptyTrash} disabled={emptying}>
+                {emptying ? 'Emptying…' : 'Empty trash'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {error && <div className="alert error">{error}</div>}
