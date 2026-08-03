@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .wrangler/
+wrangler.toml.bak
 .dev.vars
 .env
 .env.*

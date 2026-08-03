@@ -170,14 +170,52 @@ unsigned both 403; greeting endpoint byte-identical to source; TwiML emits
 `<Play>`; magic link delivered and used to sign in; address enumeration returns
 byte-identical responses for owner and non-owner.
 
+## The installer, and what testing it turned up
+
+`claude/one-command-installer` adds `npm run setup` and, more importantly,
+serves the web app *from the Worker* on a single origin — which removes GitHub
+Pages, CORS, the WebAuthn RP-ID mismatch, and the Pages environment rules from
+setup, four of the worst traps in the table above.
+
+**The single-origin routing works.** Verified by running the generated config
+under `wrangler dev --local` and probing it: `/` and unknown paths return the
+app, `/health` returns the Worker's JSON, hashed assets and the service worker
+are served, `/api/*` returns `401 Not signed in`, `/twilio/voice` returns 405
+for a GET, and `/greeting.mp3` reaches the Worker's R2 handler. `wrangler
+deploy --dry-run` accepts the config with all three bindings.
+
+The mechanism is `[assets]` with `run_worker_first` listing the Worker's own
+route prefixes. That list is load-bearing in a quiet way: `not_found_handling =
+"single-page-application"` means an *unlisted* route doesn't 404, it returns
+`index.html` with a 200. Add a route to `src/index.js`, forget the list, and
+Twilio gets HTML where it expected TwiML. `worker/test/routing.test.mjs` now
+derives the routes from `index.js` and fails if any of them isn't covered.
+
+Bugs found in the installer while testing it:
+
+| Bug | Consequence |
+|---|---|
+| `npx wrangler` with no `npm ci` in `worker/` | Pulls whatever version npm serves, ignoring the lockfile — and `run_worker_first` as a *list* is not in older wrangler. `npx` also stops to ask before installing, which deadlocks the calls that pipe a secret in on stdin. Now installs the pinned 4.118.0 and runs the local binary. |
+| D1 id scraped from `wrangler d1 create` output | That output is formatting, not an interface. The API is the authority, and is now asked first; the regex is the fallback. |
+| R2 failure matched against `e.stdout` | Errors arrive on **stderr**, so the "R2 isn't enabled" branch could never fire — and every other failure was silently reported as "already existed, reusing it". |
+| Secrets rewritten on every run | Re-running rotated `SESSION_SECRET` (signs out every device), the VAPID keys (silently kills push on subscribed devices), and `SETUP_CODE`. Generated secrets are now written once; typed credentials are still always written. |
+| Number purchased with no Trust Hub check | On a genuinely clean Twilio account this throws an unhandled rejection, after a successful deploy, with a raw stack. It now checks for an approved customer profile first and, if there isn't one, finishes the deploy and explains the two-day approval and the re-run. |
+| Unhandled rejections anywhere | Raw stack trace, readline left open. Now caught and printed as a message plus the child process's stderr. |
+
+**Still untested, and honestly so:** no part of this has run against live
+Cloudflare or Twilio credentials — no account was provisioned, nothing was
+purchased. What's verified is the config, the routing, and the script's logic;
+what isn't is the sequence of live API calls. The Trust Hub gate means a
+truly clean Twilio account can't complete in one pass regardless.
+
 ## Open items
 
-**`claude/one-command-installer`** — unmerged, untested. Adds `npm run setup`
-(provisions everything in ~2 minutes) and, more importantly, serves the web app
-*from the Worker* on a single origin. That change alone removes GitHub Pages,
-CORS, the WebAuthn RP-ID mismatch, and the Pages environment rules from setup —
-four of the worst traps in the table above. **Needs testing against a clean
-Cloudflare and Twilio account before merging.**
+The live install still runs on GitHub Pages. Nothing about it changed here, and
+the Pages workflow only fires on pushes touching `web/**`, so merging the
+installer doesn't disturb it. Moving the live system onto the single origin
+would mean deploying with the new config and updating `RP_ID` — and changing
+`RP_ID` invalidates the existing passkey, so enroll on the new origin (via
+magic link or a recovery code) before assuming the old one still works.
 
 Optional, never done: a second passkey (currently one, so a lost phone means
 falling back to recovery codes), and Apps Script for third-party-free emailed

@@ -58,7 +58,7 @@ Single-user by construction. There is no registration, no user table, no
 |---|---|
 | **Sign-in** | WebAuthn passkey — Face ID, Touch ID, Windows Hello, security key |
 | **Failsafe 1** | Magic link, only ever to `OWNER_EMAIL`, single-use, 15 min |
-| **Failsafe 2** | Ten single-use recovery codes, stored as PBKDF2 hashes (210k iterations) |
+| **Failsafe 2** | Ten single-use recovery codes, stored as PBKDF2 hashes (100k iterations — the Workers runtime cap) |
 | **Enrollment** | Locks the instant the first passkey exists; adding a device requires being signed in |
 | **Webhooks** | Every Twilio request verified by HMAC-SHA1 signature |
 | **Audio** | Served via short-lived HMAC tokens scoped to one message |
@@ -77,7 +77,28 @@ last resort.
 
 ## Setup
 
-**[→ docs/SETUP.md](docs/SETUP.md)** — about 45 minutes, in order.
+```bash
+npm run setup
+```
+
+Provisions the database, storage, keys, secrets, Worker, and phone number into
+your own Cloudflare and Twilio accounts, then prints your app URL and the
+dialer code that turns on call forwarding. It asks for a Cloudflare API token,
+your Twilio credentials, an AssemblyAI key, and your email address. Re-running
+it is safe: existing resources are reused, and the generated session and push
+keys are written once and then left alone.
+
+This path serves the web app **from the Worker**, on one origin — no GitHub
+Pages, no cross-origin CORS, no WebAuthn RP-ID to keep in sync.
+
+One thing it can't do for you: Twilio won't sell a number until it has approved
+a Trust Hub customer profile, and that's a human review of up to two business
+days. The installer checks for approval, and if there isn't one it deploys
+everything else and tells you to run `scripts/setup-twilio-profile.mjs` and
+come back. Nothing is lost — the re-run just adds the number.
+
+**Prefer to do it by hand, or deploying the app to GitHub Pages instead?**
+[→ docs/SETUP.md](docs/SETUP.md) — about 45 minutes, in order.
 
 You'll need a Twilio account, a free Cloudflare account, an AssemblyAI key, and
 a Google account.
@@ -93,8 +114,10 @@ worker/       Cloudflare Worker — Twilio webhooks, auth, API
     auth.js        passkeys, magic links, recovery codes, sessions
     notify.js      web push (RFC 8291) + Gmail bridge
     api.js         voicemail CRUD, audio streaming
-  test/       crypto tests — run with `npm test`
-web/          React app → GitHub Pages
+  test/       crypto and routing tests — run with `npm test`
+  wrangler.template.toml   config `npm run setup` renders
+web/          React app — served by the Worker, or by GitHub Pages
+scripts/      install.mjs (one-command setup) and the Twilio helpers
 appsscript/   Google Apps Script — sends Gmail as you
 docs/         Setup and transcription guides
 ```
