@@ -18,6 +18,8 @@ export default function Inbox({ route }) {
   const [error, setError] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [emptying, setEmptying] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Deep link from a push notification or email: #/vm/<id>
   useEffect(() => {
@@ -40,6 +42,10 @@ export default function Inbox({ route }) {
   }, [filter, query]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Switching tab or search changes which messages are on screen, and a
+  // selection the user can no longer see is one they can't reason about.
+  useEffect(() => { setSelected(new Set()); }, [filter, query]);
 
   // Debounced search.
   const [rawQuery, setRawQuery] = useState('');
@@ -90,6 +96,41 @@ export default function Inbox({ route }) {
     catch (e) { setError(e.message); load(); }
   };
 
+  /* ---- multi-select ---- */
+
+  const toggleSelected = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Only ever counts what's on screen: the poll can drop a message out of the
+  // list between renders, and a stale id would silently do nothing.
+  const visibleSelected = items.filter((v) => selected.has(v.id));
+  const allSelected = items.length > 0 && visibleSelected.length === items.length;
+
+  // `confirm`, when given, is the dialog options — message included. Actions
+  // that can be undone from the Trash don't pass it.
+  const bulk = async (action, confirm) => {
+    const ids = visibleSelected.map((v) => v.id);
+    if (!ids.length) return;
+    if (confirm && !(await dialogs.confirm(confirm.message, confirm))) return;
+
+    setBulkBusy(true);
+    try {
+      await api.bulk(action, ids);
+      setSelected(new Set());
+      await load();
+    } catch (e) {
+      setError(e.message);
+      load();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // Counts come from stats rather than the visible list, because a search can
   // hide trashed messages that emptying would still delete.
   const trashedSaved = stats.trashedSaved ?? 0;
@@ -100,7 +141,11 @@ export default function Inbox({ route }) {
   // retentionDays ships in the same change. Otherwise the button would be
   // there to press and answer 404, and it starts working on its own the moment
   // the Worker catches up.
-  const canEmptyTrash = stats.retentionDays != null;
+  const has = (feature) => stats.features?.includes(feature) ?? false;
+  // retentionDays predates the features list, so it still stands in for
+  // emptyTrash on a Worker deployed between the two changes.
+  const canEmptyTrash = has('emptyTrash') || stats.retentionDays != null;
+  const canBulk = has('bulk');
 
   const emptyTrash = async () => {
     const confirmed = await dialogs.confirm(
@@ -160,6 +205,57 @@ export default function Inbox({ route }) {
         )}
       </div>
 
+      {canBulk && items.length > 0 && (
+        <div className={visibleSelected.length ? 'bulk-bar active' : 'bulk-bar'}>
+          <label className="select-all">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              // Some but not all: neither ticked nor empty, so the box says so.
+              ref={(el) => { if (el) el.indeterminate = visibleSelected.length > 0 && !allSelected; }}
+              onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((v) => v.id)))}
+              aria-label={allSelected ? 'Deselect all' : 'Select all'}
+            />
+            <span className="muted small">
+              {visibleSelected.length ? `${visibleSelected.length} selected` : 'Select'}
+            </span>
+          </label>
+
+          {visibleSelected.length > 0 && (
+            <div className="bulk-actions">
+              {filter === 'trash' ? (
+                <>
+                  <button className="ghost small" disabled={bulkBusy}
+                    onClick={() => bulk('restore')}>Restore</button>
+                  <button className="danger small" disabled={bulkBusy}
+                    onClick={() => bulk('purge', {
+                      message: `Permanently delete ${countLabel(visibleSelected.length)}, audio included? This cannot be undone.`,
+                      title: 'Delete forever',
+                      confirmLabel: 'Delete',
+                      danger: true,
+                    })}>Delete forever</button>
+                </>
+              ) : (
+                <>
+                  <button className="ghost small" disabled={bulkBusy}
+                    onClick={() => bulk('save')}>★ Save</button>
+                  <button className="ghost small" disabled={bulkBusy}
+                    onClick={() => bulk('unsave')}>☆ Unsave</button>
+                  <button className="ghost small" disabled={bulkBusy}
+                    onClick={() => bulk('read')}>Mark read</button>
+                  <button className="ghost small" disabled={bulkBusy}
+                    onClick={() => bulk('unread')}>Mark unread</button>
+                  {/* Recoverable from Trash, so no confirmation — same as
+                      deleting one message. */}
+                  <button className="danger small" disabled={bulkBusy}
+                    onClick={() => bulk('trash')}>Delete</button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {error && <div className="alert error">{error}</div>}
 
       {loading && items.length === 0 && <div className="muted pad">Loading…</div>}
@@ -177,6 +273,9 @@ export default function Inbox({ route }) {
             vm={vm}
             expanded={openId === vm.id}
             inTrash={filter === 'trash'}
+            selectable={canBulk}
+            selected={selected.has(vm.id)}
+            onToggleSelected={() => toggleSelected(vm.id)}
             onToggleExpand={() => setOpenId(openId === vm.id ? null : vm.id)}
             onToggleSaved={() => toggleSaved(vm)}
             onToggleRead={() => toggleRead(vm)}
@@ -196,8 +295,8 @@ export default function Inbox({ route }) {
 }
 
 function VoicemailCard({
-  vm, expanded, inTrash, onToggleExpand, onToggleSaved,
-  onToggleRead, onDelete, onRestore, onRetranscribe,
+  vm, expanded, inTrash, selectable, selected, onToggleSelected,
+  onToggleExpand, onToggleSaved, onToggleRead, onDelete, onRestore, onRetranscribe,
 }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
@@ -211,8 +310,21 @@ function VoicemailCard({
   };
 
   return (
-    <li className={`vm ${vm.isRead ? '' : 'unread'} ${expanded ? 'expanded' : ''}`}>
+    <li className={`vm ${vm.isRead ? '' : 'unread'} ${expanded ? 'expanded' : ''} ${selected ? 'selected' : ''}`}>
       <div className="vm-head" onClick={onToggleExpand}>
+        {selectable && (
+          // The whole row opens the message, so the checkbox has to keep its
+          // clicks to itself or ticking one would also expand it.
+          <input
+            className="vm-select"
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelected}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select voicemail from ${vm.fromLabel}`}
+          />
+        )}
+
         {vm.hasAudio && (
           <button className="play" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'}>
             {playing ? '❚❚' : '▶'}
@@ -312,6 +424,10 @@ function VoicemailCard({
  */
 function canReply(from) {
   return typeof from === 'string' && /^\+?\d{7,15}$/.test(from.replace(/[\s()-]/g, ''));
+}
+
+function countLabel(n) {
+  return n === 1 ? 'this 1 voicemail' : `these ${n} voicemails`;
 }
 
 function emptyMessage(filter) {

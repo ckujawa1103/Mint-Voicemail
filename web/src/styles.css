@@ -281,6 +281,38 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   margin-top: 12px;
 }
 
+/* Selection bar: quiet until something is selected, then it's the toolbar. */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 4px 12px;
+}
+.bulk-bar.active {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.select-all { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+
+.bulk-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+
+/* Big enough to hit with a thumb without aiming. */
+.vm-select, .select-all input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .vm-list { list-style: none; margin: 0; padding: 0; }
 
 .vm {
@@ -292,6 +324,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 .vm.unread { border-left: 3px solid var(--accent); }
 .vm.expanded { background: var(--surface-2); }
+.vm.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
 
 .vm-head {
   display: flex;

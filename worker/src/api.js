@@ -74,6 +74,76 @@ export async function handleApi(req, env, path, ctx) {
     return json({ voicemails: items }, opts);
   }
 
+  // Apply one action to a set of voicemails. Declared before the single-item
+  // routes below, which would otherwise read "bulk" as a voicemail id.
+  //
+  // One request rather than one per message: a loop in the browser is slow
+  // over a phone connection and can half-finish, leaving the list showing a
+  // state the database never had.
+  if (path === '/api/voicemails/bulk' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({}));
+    const action = String(body.action || '');
+
+    // Ids come from our own list responses, but they still land in SQL, so
+    // they're shape-checked and de-duplicated before going anywhere near it.
+    const ids = [...new Set(
+      (Array.isArray(body.ids) ? body.ids : [])
+        .filter((id) => typeof id === 'string' && /^[\w-]+$/.test(id)),
+    )];
+
+    if (!ids.length) return err('No voicemails selected', 400, opts);
+    // The list endpoint returns at most 200, so a larger selection can't have
+    // come from the app. Also keeps the bind-parameter count well inside
+    // SQLite's limit.
+    if (ids.length > 200) return err('Too many voicemails at once (200 max)', 400, opts);
+
+    const placeholders = ids.map(() => '?').join(',');
+
+    if (action === 'purge') {
+      const rows = await env.DB.prepare(
+        `SELECT id, r2_key FROM voicemails WHERE id IN (${placeholders})`,
+      ).bind(...ids).all();
+      const doomed = rows.results || [];
+
+      // Audio first, for the same reason as emptying the trash: a failure
+      // here is retryable, the other order strands objects in R2.
+      const keys = doomed.map((r) => r.r2_key).filter(Boolean);
+      for (let i = 0; i < keys.length; i += 1000) {
+        await env.AUDIO.delete(keys.slice(i, i + 1000));
+      }
+
+      await env.DB.prepare(`DELETE FROM voicemails WHERE id IN (${placeholders})`).bind(...ids).run();
+      if (doomed.length) await audit(env.DB, 'voicemails_purged', { count: doomed.length }, req);
+      return json({ ok: true, action, count: doomed.length }, opts);
+    }
+
+    const UPDATES = {
+      save:    ['is_saved = 1'],
+      unsave:  ['is_saved = 0'],
+      read:    ['is_read = 1'],
+      unread:  ['is_read = 0'],
+      restore: ['deleted_at = NULL'],
+    };
+
+    let sql;
+    let binds = ids;
+    if (action === 'trash') {
+      // Already-trashed messages keep their original deleted_at, so trashing
+      // a mixed selection can't quietly extend anything's retention.
+      sql = `UPDATE voicemails SET deleted_at = ? WHERE id IN (${placeholders}) AND deleted_at IS NULL`;
+      binds = [now(), ...ids];
+    // hasOwn, not a bare lookup: "constructor" and friends are inherited and
+    // truthy, and would get past this to fail as a 500 further down.
+    } else if (Object.hasOwn(UPDATES, action)) {
+      sql = `UPDATE voicemails SET ${UPDATES[action].join(', ')} WHERE id IN (${placeholders})`;
+    } else {
+      return err(`Unknown action "${action}"`, 400, opts);
+    }
+
+    const result = await env.DB.prepare(sql).bind(...binds).run();
+    return json({ ok: true, action, count: result.meta?.changes ?? ids.length }, opts);
+  }
+
   // Empty the trash in one go, rather than deleting one at a time or waiting
   // out TRASH_RETENTION_DAYS. Scoped exactly like the nightly purge — trashed
   // and not saved — so it can only ever touch what is already in the trash,
@@ -111,7 +181,16 @@ export async function handleApi(req, env, path, ctx) {
     ).first();
     // Retention travels with the stats so the trash can state its own rule
     // instead of the app hardcoding a number the Worker config can change.
-    return json({ ...(row ?? {}), retentionDays: clampInt(env.TRASH_RETENTION_DAYS, 1, 3650, 30) }, opts);
+    //
+    // `features` lets the app tell what this Worker can do. The app deploys on
+    // every push to main and the Worker only when asked, so the app can be the
+    // newer of the two; without this it would offer controls that 404 until
+    // the Worker catches up.
+    return json({
+      ...(row ?? {}),
+      retentionDays: clampInt(env.TRASH_RETENTION_DAYS, 1, 3650, 30),
+      features: ['emptyTrash', 'bulk'],
+    }, opts);
   }
 
   /* ---- single item ---- */
