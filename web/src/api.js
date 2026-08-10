@@ -80,6 +80,8 @@ export const api = {
     request(`/api/voicemails/${id}${permanent ? '?permanent=1' : ''}`, { method: 'DELETE' }),
   restore: (id) => request(`/api/voicemails/${id}/restore`, { method: 'POST', body: {} }),
   emptyTrash: () => request('/api/trash', { method: 'DELETE' }),
+  bulk: (action, ids) =>
+    request('/api/voicemails/bulk', { method: 'POST', body: { action, ids: [...ids] } }),
   retranscribe: (id) => request(`/api/voicemails/${id}/retranscribe`, { method: 'POST', body: {} }),
   stats: () => request('/api/stats'),
 
