@@ -2,6 +2,33 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../api.js';
 import { dialogs } from './Dialog.jsx';
 
+// How long a press has to last to mean "select this" rather than "open this".
+const LONG_PRESS_MS = 500;
+// A press that slides this far is a scroll, not a press.
+const LONG_PRESS_SLOP_PX = 10;
+
+/**
+ * True on a device with no hover — a phone or tablet being used by finger.
+ * Not user-agent sniffing: a tablet with a mouse attached reports hover and is
+ * treated as a desktop, which is the behaviour you'd want either way.
+ */
+function useTouchOnly() {
+  const query = '(hover: none)';
+  const [touchOnly, setTouchOnly] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia?.(query).matches === true,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia?.(query);
+    if (!mq) return;
+    const update = () => setTouchOnly(mq.matches);
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+
+  return touchOnly;
+}
+
 const FILTERS = [
   { key: 'inbox',  label: 'Inbox' },
   { key: 'unread', label: 'Unread' },
@@ -20,6 +47,14 @@ export default function Inbox({ route }) {
   const [emptying, setEmptying] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+
+  // On a phone the checkboxes would cost a column of width on every row for a
+  // thing you rarely do, so they stay hidden until a long press asks for them.
+  // With a mouse there's room and hovering makes them cheap, so they're always
+  // on and this whole mode is inert.
+  const touchOnly = useTouchOnly();
+  const showCheckboxes = !touchOnly || selecting;
 
   // Deep link from a push notification or email: #/vm/<id>
   useEffect(() => {
@@ -105,6 +140,15 @@ export default function Inbox({ route }) {
       return next;
     });
   };
+
+  const startSelecting = (id) => {
+    setSelecting(true);
+    toggleSelected(id);
+  };
+
+  // Emptying the selection is how you leave selection mode — untick the last
+  // one, or use Cancel. Nothing to leave on a desktop, where the boxes stay.
+  useEffect(() => { if (selected.size === 0) setSelecting(false); }, [selected]);
 
   // Only ever counts what's on screen: the poll can drop a message out of the
   // list between renders, and a stale id would silently do nothing.
@@ -205,7 +249,12 @@ export default function Inbox({ route }) {
         )}
       </div>
 
-      {canBulk && items.length > 0 && (
+      {/* Nothing on screen says the long press exists, so something has to. */}
+      {canBulk && items.length > 0 && touchOnly && !selecting && (
+        <p className="muted small select-hint">Press and hold a message to select several</p>
+      )}
+
+      {canBulk && items.length > 0 && showCheckboxes && (
         <div className={visibleSelected.length ? 'bulk-bar active' : 'bulk-bar'}>
           <label className="select-all">
             <input
@@ -220,6 +269,10 @@ export default function Inbox({ route }) {
               {visibleSelected.length ? `${visibleSelected.length} selected` : 'Select'}
             </span>
           </label>
+
+          {touchOnly && (
+            <button className="ghost small" onClick={() => setSelected(new Set())}>Cancel</button>
+          )}
 
           {visibleSelected.length > 0 && (
             <div className="bulk-actions">
@@ -273,9 +326,10 @@ export default function Inbox({ route }) {
             vm={vm}
             expanded={openId === vm.id}
             inTrash={filter === 'trash'}
-            selectable={canBulk}
+            selectable={canBulk && showCheckboxes}
             selected={selected.has(vm.id)}
             onToggleSelected={() => toggleSelected(vm.id)}
+            onLongPress={canBulk && touchOnly ? () => startSelecting(vm.id) : null}
             onToggleExpand={() => setOpenId(openId === vm.id ? null : vm.id)}
             onToggleSaved={() => toggleSaved(vm)}
             onToggleRead={() => toggleRead(vm)}
@@ -295,11 +349,71 @@ export default function Inbox({ route }) {
 }
 
 function VoicemailCard({
-  vm, expanded, inTrash, selectable, selected, onToggleSelected,
+  vm, expanded, inTrash, selectable, selected, onToggleSelected, onLongPress,
   onToggleExpand, onToggleSaved, onToggleRead, onDelete, onRestore, onRetranscribe,
 }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
+
+  /* ---- press and hold to start selecting ---- */
+
+  const pressTimer = useRef(null);
+  const pressOrigin = useRef(null);
+  // A long press ends in a click too. This swallows that one click, so
+  // selecting a message doesn't also open it.
+  const wasLongPress = useRef(false);
+
+  const cancelPress = () => {
+    clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+  };
+
+  // Timers outlive unmount otherwise, and would fire against a dead component.
+  useEffect(() => cancelPress, []);
+
+  const onTouchStart = (e) => {
+    if (!onLongPress) return;
+    const touch = e.touches?.[0];
+    pressOrigin.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+    wasLongPress.current = false;
+    cancelPress();
+    pressTimer.current = setTimeout(() => {
+      wasLongPress.current = true;
+      navigator.vibrate?.(10); // a tick of feedback where the platform offers it
+      onLongPress();
+    }, LONG_PRESS_MS);
+  };
+
+  const onTouchMove = (e) => {
+    const touch = e.touches?.[0];
+    if (!touch || !pressOrigin.current) return;
+    const moved = Math.hypot(touch.clientX - pressOrigin.current.x, touch.clientY - pressOrigin.current.y);
+    if (moved > LONG_PRESS_SLOP_PX) cancelPress(); // they're scrolling
+  };
+
+  const onTouchEnd = (e) => {
+    cancelPress();
+    // Suppress the click the browser synthesises after a touch. By now the
+    // list has reflowed — checkboxes in, hint out — so that click lands
+    // wherever the layout moved to, which is often the checkbox that just
+    // appeared, instantly undoing the selection the press just made.
+    if (wasLongPress.current) {
+      e.preventDefault();
+      // The synthesised click, if one comes at all, arrives before this timer
+      // and is swallowed below. Clearing here rather than latching the flag
+      // means a later, unrelated click is never eaten.
+      setTimeout(() => { wasLongPress.current = false; }, 0);
+    }
+  };
+
+  const handleClick = () => {
+    cancelPress();
+    if (wasLongPress.current) {
+      wasLongPress.current = false;
+      return;
+    }
+    onToggleExpand();
+  };
 
   const togglePlay = (e) => {
     e.stopPropagation();
@@ -311,7 +425,17 @@ function VoicemailCard({
 
   return (
     <li className={`vm ${vm.isRead ? '' : 'unread'} ${expanded ? 'expanded' : ''} ${selected ? 'selected' : ''}`}>
-      <div className="vm-head" onClick={onToggleExpand}>
+      <div
+        className="vm-head"
+        onClick={handleClick}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={cancelPress}
+        // iOS pops its own text-selection callout on a long press otherwise,
+        // which lands on top of ours.
+        onContextMenu={(e) => { if (onLongPress) e.preventDefault(); }}
+      >
         {selectable && (
           // The whole row opens the message, so the checkbox has to keep its
           // clicks to itself or ticking one would also expand it.
