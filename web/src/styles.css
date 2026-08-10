@@ -302,6 +302,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 .select-all { display: flex; align-items: center; gap: 9px; cursor: pointer; }
 
+.select-hint { margin: 0 0 10px; padding: 0 4px; }
+
 .bulk-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
 
 /* Big enough to hit with a thumb without aiming. */
@@ -334,6 +336,17 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   cursor: pointer;
 }
 .vm-head:hover { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+
+/* Touch devices: a long press here means "select", so the browser's own
+   press-and-hold behaviours have to stay out of the way. The transcript in the
+   expanded body is untouched and stays selectable. */
+@media (hover: none) {
+  .vm-head {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
 
 .play {
   flex: none;
