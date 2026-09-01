@@ -7,7 +7,7 @@
 
 import { handleVoice, handleDone, handleRecording, verifyTwilioSignature } from './twilio.js';
 import { handleAuth, purgeExpired } from './auth.js';
-import { handleApi, purgeTrash } from './api.js';
+import { handleApi, purgeTrash, sweepAbandoned } from './api.js';
 import { json, err, corsHeaders, audit } from './util.js';
 
 export default {
@@ -79,6 +79,6 @@ export default {
 
   // Nightly housekeeping: expire sessions/challenges, purge old trash.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(Promise.all([purgeExpired(env), purgeTrash(env)]));
+    ctx.waitUntil(Promise.all([purgeExpired(env), sweepAbandoned(env), purgeTrash(env)]));
   },
 };
