@@ -138,10 +138,16 @@ export async function handleRecording(req, env, params, ctx) {
 
   if (!callSid || !recordingUrl) return new Response('', { status: 204 });
 
-  // Hang-ups and dial-tone blips aren't voicemails. Drop the placeholder row.
+  // Hang-ups and dial-tone blips aren't voicemails. They go to the Trash
+  // rather than being deleted outright: an unexpected one is still worth
+  // seeing, and the nightly purge clears them out on the normal schedule.
+  // Marked read so they never show up in the unread count.
   if (duration < 2) {
-    await env.DB.prepare('DELETE FROM voicemails WHERE call_sid = ? AND r2_key IS NULL')
-      .bind(callSid).run();
+    await env.DB.prepare(
+      `UPDATE voicemails
+          SET deleted_at = ?, is_read = 1, duration_sec = ?
+        WHERE call_sid = ? AND r2_key IS NULL AND deleted_at IS NULL`,
+    ).bind(now(), duration, callSid).run();
     return new Response('', { status: 204 });
   }
 

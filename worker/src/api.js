@@ -44,6 +44,11 @@ export async function handleApi(req, env, path, ctx) {
 
   /* ---- collection ---- */
   if (path === '/api/voicemails' && req.method === 'GET') {
+    // Clear out abandoned calls before reading, so the list is already correct
+    // rather than correct-by-tomorrow. One indexed UPDATE that usually matches
+    // nothing at all.
+    await sweepAbandoned(env);
+
     const filter = url.searchParams.get('filter') || 'inbox';
     const q = (url.searchParams.get('q') || '').trim();
     const limit = clampInt(url.searchParams.get('limit'), 1, 200, 100);
@@ -369,6 +374,37 @@ async function streamAudio(req, env, id, token) {
   }
 
   return new Response(object.body, { headers });
+}
+
+// How long to wait before deciding a call left no message. Twilio's recording
+// callback normally lands within seconds of the caller hanging up; this is
+// generous enough that a slow one can never be mistaken for an abandoned call.
+const ABANDONED_GRACE_SEC = 10 * 60;
+
+/**
+ * Move calls that left no recording to the Trash.
+ *
+ * A row is created when the call is answered, so the caller ID survives even
+ * if the caller hangs up during the greeting. When they do hang up early,
+ * Twilio sends no recording callback at all — so nothing else would ever clean
+ * these up, and they pile up in the inbox as 0-second entries with no audio.
+ *
+ * Trashed rather than deleted, so an unexpected one is still visible, and
+ * marked read so they never inflate the unread badge. The nightly purge then
+ * clears them on the normal retention schedule.
+ */
+export async function sweepAbandoned(env) {
+  const result = await env.DB.prepare(
+    `UPDATE voicemails
+        SET deleted_at = ?, is_read = 1
+      WHERE r2_key IS NULL
+        AND deleted_at IS NULL
+        AND created_at < ?`,
+  ).bind(now(), now() - ABANDONED_GRACE_SEC).run();
+
+  const moved = result.meta?.changes ?? 0;
+  if (moved) await audit(env.DB, 'abandoned_calls_trashed', { count: moved });
+  return moved;
 }
 
 /** Scheduled cleanup: purge trashed, unsaved voicemails past the retention window. */
