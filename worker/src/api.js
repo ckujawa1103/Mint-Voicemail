@@ -6,6 +6,7 @@ import {
 } from './util.js';
 import { requireSession } from './auth.js';
 import { transcribe } from './transcribe.js';
+import { identifyVoicemail, CATEGORIES } from './identify.js';
 
 function shape(row) {
   return {
@@ -18,6 +19,13 @@ function shape(row) {
     transcript: row.transcript,
     transcriptStatus: row.transcript_status,
     transcriptProvider: row.transcript_provider,
+    callerId: row.caller_id,
+    callerName: row.caller_name,
+    callerCategory: row.caller_category,
+    callerPerson: row.caller_person,
+    callerCallback: row.caller_callback,
+    summary: row.summary,
+    identifyStatus: row.identify_status,
     confidence: row.transcript_confidence,
     isRead: !!row.is_read,
     isSaved: !!row.is_saved,
@@ -39,6 +47,59 @@ export async function handleApi(req, env, path, ctx) {
     return streamAudio(req, env, audioMatch[1], url.searchParams.get('t'));
   }
 
+  // Contact card for every identified caller.
+  //
+  // This is the answer to "tell me who it is before I answer": import it into
+  // your phone's contacts and the dialer shows the group's name natively,
+  // across every number that caller uses. A web app can't screen a live call,
+  // but the phone already does exactly that for known contacts.
+  //
+  // Authenticated by a short-lived signed token rather than the session, for
+  // the same reason as audio: a plain download can't carry an Authorization
+  // header. The signature is scoped to this one export and expires.
+  if (path === '/api/callers/export.vcf' && req.method === 'GET') {
+    if (!(await verifyAudioToken(env, EXPORT_SCOPE, url.searchParams.get('t')))) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    const rows = await env.DB.prepare(
+      `SELECT c.name, c.category,
+              (SELECT GROUP_CONCAT(n.number)
+                 FROM caller_numbers n WHERE n.caller_id = c.id) AS numbers
+         FROM callers c
+        ORDER BY c.name`,
+    ).all();
+
+    const cards = [];
+    for (const row of rows.results || []) {
+      const numbers = (row.numbers || '').split(',').filter(Boolean);
+      if (!numbers.length) continue;
+
+      const label = row.category && row.category !== 'other'
+        ? `${row.name} (${row.category.replace(/_/g, ' ')})`
+        : row.name;
+
+      cards.push([
+        'BEGIN:VCARD',
+        'VERSION:3.0',
+        `FN:${vcardEscape(label)}`,
+        `N:${vcardEscape(label)};;;;`,
+        `ORG:${vcardEscape(row.name)}`,
+        ...numbers.map((n) => `TEL;TYPE=WORK,VOICE:${n}`),
+        `NOTE:${vcardEscape(`Identified from voicemail. ${numbers.length} number(s) seen.`)}`,
+        'END:VCARD',
+      ].join('\r\n'));
+    }
+
+    return new Response(cards.join('\r\n') + (cards.length ? '\r\n' : ''), {
+      headers: {
+        'Content-Type': 'text/vcard; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="voicemail-callers.vcf"',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
   const session = await requireSession(req, env);
   if (!session) return err('Not signed in', 401, opts);
 
@@ -53,20 +114,39 @@ export async function handleApi(req, env, path, ctx) {
     const q = (url.searchParams.get('q') || '').trim();
     const limit = clampInt(url.searchParams.get('limit'), 1, 200, 100);
 
+    // Columns are qualified throughout: joining callers brings id, name,
+    // category and created_at into scope, all of which collide.
     let where;
-    if (filter === 'trash') where = 'deleted_at IS NOT NULL';
-    else if (filter === 'saved') where = 'deleted_at IS NULL AND is_saved = 1';
-    else if (filter === 'unread') where = 'deleted_at IS NULL AND is_read = 0';
-    else where = 'deleted_at IS NULL';
+    if (filter === 'trash') where = 'v.deleted_at IS NOT NULL';
+    else if (filter === 'saved') where = 'v.deleted_at IS NULL AND v.is_saved = 1';
+    else if (filter === 'unread') where = 'v.deleted_at IS NULL AND v.is_read = 0';
+    else where = 'v.deleted_at IS NULL';
 
     const binds = [];
+
+    // Narrow to one caller group — every number that entity has ever used.
+    const callerId = url.searchParams.get('callerId');
+    if (callerId) {
+      where += ' AND v.caller_id = ?';
+      binds.push(callerId);
+    }
+
     if (q) {
-      where += ' AND (transcript LIKE ? OR from_number LIKE ? OR from_name LIKE ?)';
-      binds.push(`%${q}%`, `%${q}%`, `%${q}%`);
+      // Searching the caller name too, so "meridian" finds the group's
+      // messages even when the transcript never spells it that way.
+      where += ' AND (v.transcript LIKE ? OR v.from_number LIKE ?'
+             + ' OR v.from_name LIKE ? OR v.summary LIKE ? OR c.name LIKE ?)';
+      const like = `%${q}%`;
+      binds.push(like, like, like, like, like);
     }
 
     const rows = await env.DB.prepare(
-      `SELECT * FROM voicemails WHERE ${where} ORDER BY created_at DESC LIMIT ?`,
+      `SELECT v.*, c.name AS caller_name, c.category AS caller_category
+         FROM voicemails v
+         LEFT JOIN callers c ON c.id = v.caller_id
+        WHERE ${where}
+        ORDER BY v.created_at DESC
+        LIMIT ?`,
     ).bind(...binds, limit).all();
 
     const items = await Promise.all((rows.results || []).map(async (r) => ({
@@ -194,7 +274,7 @@ export async function handleApi(req, env, path, ctx) {
     return json({
       ...(row ?? {}),
       retentionDays: clampInt(env.TRASH_RETENTION_DAYS, 1, 3650, 30),
-      features: ['emptyTrash', 'bulk'],
+      features: ['emptyTrash', 'bulk', 'callers'],
     }, opts);
   }
 
@@ -278,6 +358,142 @@ export async function handleApi(req, env, path, ctx) {
     }
   }
 
+  /* ---- caller groups ---- */
+
+  // One row per caller entity, with every number it has used and how often.
+  if (path === '/api/callers' && req.method === 'GET') {
+    const rows = await env.DB.prepare(
+      `SELECT c.id, c.name, c.category, c.note, c.pinned,
+              COUNT(v.id)                                          AS total,
+              SUM(CASE WHEN v.is_read = 0 THEN 1 ELSE 0 END)        AS unread,
+              MAX(v.created_at)                                     AS last_call,
+              (SELECT GROUP_CONCAT(n.number)
+                 FROM caller_numbers n WHERE n.caller_id = c.id)    AS numbers
+         FROM callers c
+         LEFT JOIN voicemails v ON v.caller_id = c.id AND v.deleted_at IS NULL
+        GROUP BY c.id
+        ORDER BY last_call DESC NULLS LAST, c.name`,
+    ).all();
+
+    return json({
+      callers: (rows.results || []).map((r) => ({
+        id: r.id,
+        name: r.name,
+        category: r.category,
+        note: r.note,
+        pinned: !!r.pinned,
+        total: r.total ?? 0,
+        unread: r.unread ?? 0,
+        lastCall: r.last_call,
+        numbers: r.numbers ? r.numbers.split(',') : [],
+      })),
+      categories: CATEGORIES,
+      exportUrl: `${url.origin}/api/callers/export.vcf`
+                 + `?t=${await signAudioToken(env, EXPORT_SCOPE)}`,
+    }, opts);
+  }
+
+  // Identify everything that hasn't been done yet.
+  //
+  // Batched rather than all-at-once: each one is a model call, and a request
+  // that tried to do hundreds would exceed the Worker's time budget and lose
+  // the lot. The client calls this repeatedly until `remaining` reaches zero,
+  // so progress is durable across batches.
+  if (path === '/api/callers/identify-pending' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({}));
+    const batch = clampInt(body.batch, 1, 10, 5);
+
+    const rows = await env.DB.prepare(
+      `SELECT id, from_number, from_name, transcript
+         FROM voicemails
+        WHERE transcript_status = 'done'
+          AND (identify_status IS NULL OR identify_status = 'pending')
+        ORDER BY created_at DESC
+        LIMIT ?`,
+    ).bind(batch).all();
+
+    let done = 0;
+    for (const vm of rows.results || []) {
+      if (await identifyVoicemail(env, vm)) done++;
+    }
+
+    const left = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM voicemails
+        WHERE transcript_status = 'done'
+          AND (identify_status IS NULL OR identify_status = 'pending')`,
+    ).first();
+
+    return json({ ok: true, identified: done, remaining: left?.n ?? 0 }, opts);
+  }
+
+  const callerMatch = /^\/api\/callers\/([\w-]+)(\/merge)?$/.exec(path);
+  if (callerMatch && callerMatch[1] !== 'export.vcf') {
+    const callerId = callerMatch[1];
+    const merging = !!callerMatch[2];
+
+    // Renaming or recategorising is a human correction, so it pins the group:
+    // later extractions may add numbers to it but must not rewrite the label.
+    if (req.method === 'PATCH' && !merging) {
+      const body = await req.json().catch(() => ({}));
+      const sets = [];
+      const binds = [];
+
+      if (typeof body.name === 'string' && body.name.trim()) {
+        sets.push('name = ?', 'pinned = 1');
+        binds.push(body.name.trim().slice(0, 120));
+      }
+      if (typeof body.category === 'string' && CATEGORIES.includes(body.category)) {
+        sets.push('category = ?', 'pinned = 1');
+        binds.push(body.category);
+      }
+      if (typeof body.note === 'string') {
+        sets.push('note = ?');
+        binds.push(body.note.slice(0, 500));
+      }
+      if (!sets.length) return err('Nothing to update', 400, opts);
+
+      sets.push('updated_at = ?');
+      binds.push(now());
+
+      await env.DB.prepare(`UPDATE callers SET ${sets.join(', ')} WHERE id = ?`)
+        .bind(...binds, callerId).run();
+
+      return json({ ok: true }, opts);
+    }
+
+    // Fold one group into another: the correction for a caller that got split
+    // across two entries because they introduced themselves differently.
+    if (req.method === 'POST' && merging) {
+      const body = await req.json().catch(() => ({}));
+      const into = body.into;
+      if (!into || into === callerId) return err('Choose a different group to merge into', 400, opts);
+
+      const target = await env.DB.prepare('SELECT id FROM callers WHERE id = ?').bind(into).first();
+      if (!target) return err('Target group not found', 404, opts);
+
+      await env.DB.batch([
+        env.DB.prepare('UPDATE voicemails SET caller_id = ? WHERE caller_id = ?').bind(into, callerId),
+        env.DB.prepare('UPDATE caller_numbers SET caller_id = ? WHERE caller_id = ?').bind(into, callerId),
+        // The surviving group is now a human judgement, so pin it.
+        env.DB.prepare('UPDATE callers SET pinned = 1, updated_at = ? WHERE id = ?').bind(now(), into),
+        env.DB.prepare('DELETE FROM callers WHERE id = ?').bind(callerId),
+      ]);
+
+      await audit(env.DB, 'callers_merged', { from: callerId, into }, req);
+      return json({ ok: true }, opts);
+    }
+
+    // Deleting a group only ungroups it; the voicemails themselves stay.
+    if (req.method === 'DELETE' && !merging) {
+      await env.DB.batch([
+        env.DB.prepare("UPDATE voicemails SET caller_id = NULL, identify_status = 'pending' WHERE caller_id = ?").bind(callerId),
+        env.DB.prepare('DELETE FROM caller_numbers WHERE caller_id = ?').bind(callerId),
+        env.DB.prepare('DELETE FROM callers WHERE id = ?').bind(callerId),
+      ]);
+      return json({ ok: true }, opts);
+    }
+  }
+
   /* ---- push subscriptions ---- */
   if (path === '/api/push/subscribe' && req.method === 'POST') {
     const body = await req.json().catch(() => ({}));
@@ -306,9 +522,22 @@ export async function handleApi(req, env, path, ctx) {
   return err('Not found', 404, opts);
 }
 
+/** vCard escapes commas, semicolons, backslashes and newlines. */
+function vcardEscape(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
+}
+
 /* ------------------------------------------------------------------ */
 /* Audio streaming                                                     */
 /* ------------------------------------------------------------------ */
+
+// Scope string for the contacts export, signed with the same HMAC helper as
+// audio URLs — the "id" being signed is a fixed scope rather than a row id.
+const EXPORT_SCOPE = 'callers-export';
 
 const AUDIO_TOKEN_TTL = 6 * 3600; // long enough for a listening session
 

@@ -3,6 +3,7 @@
 import { now, randomToken, audit, formatPhone, clampInt } from './util.js';
 import { transcribe } from './transcribe.js';
 import { notifyNewVoicemail } from './notify.js';
+import { identifyVoicemail } from './identify.js';
 
 /**
  * Validate X-Twilio-Signature (see Twilio "Validating Signatures").
@@ -200,14 +201,34 @@ async function ingestRecording(env, { callSid, recordingSid, recordingUrl, durat
       await audit(env.DB, 'transcribe_failed', { callSid, error: String(e) });
     }
 
+    // Work out who called, so the message is filed under a caller group
+    // before the notification goes out and can name them. Never throws.
+    let identity = null;
+    if (transcript) {
+      identity = await identifyVoicemail(env, {
+        id: row.id,
+        from_number: row.from_number,
+        from_name: row.from_name,
+        transcript,
+      });
+    }
+
     // Delete the copy on Twilio's servers. We have it in R2, and leaving it
     // there costs money and widens where your voicemail lives.
     if (recordingSid) await deleteTwilioRecording(env, recordingSid);
 
+    // Prefer the identified organisation in the alert. Seeing "Meridian
+    // Recovery" is worth far more at a glance than a number you don't
+    // recognise, especially when they call from a different one each time.
+    const callerName = identity?.callerId
+      ? (await env.DB.prepare('SELECT name FROM callers WHERE id = ?')
+          .bind(identity.callerId).first())?.name
+      : null;
+
     await notifyNewVoicemail(env, {
       id: row.id,
       from: row.from_number,
-      fromLabel: row.from_name || formatPhone(row.from_number),
+      fromLabel: callerName || row.from_name || formatPhone(row.from_number),
       duration,
       transcript,
     });

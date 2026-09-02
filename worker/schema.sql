@@ -18,12 +18,46 @@ CREATE TABLE IF NOT EXISTS voicemails (
   is_read               INTEGER DEFAULT 0,
   is_saved              INTEGER DEFAULT 0,  -- saved items are exempt from trash purge
   deleted_at            INTEGER,            -- soft delete; NULL means live
-  created_at            INTEGER NOT NULL
+  created_at            INTEGER NOT NULL,
+  -- Caller grouping: which entity this message belongs to, plus the
+  -- per-message details extracted from the transcript.
+  caller_id             TEXT,
+  caller_person         TEXT,
+  caller_callback       TEXT,
+  summary               TEXT,
+  identify_status       TEXT DEFAULT 'pending'
 );
 
 CREATE INDEX IF NOT EXISTS idx_vm_created  ON voicemails (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vm_deleted  ON voicemails (deleted_at);
 CREATE INDEX IF NOT EXISTS idx_vm_unread   ON voicemails (is_read, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_vm_caller   ON voicemails (caller_id);
+
+-- Smart caller groups. A caller is a real-world entity that may reach you from
+-- many numbers — agencies rotate them constantly — so identity is extracted
+-- from what the caller says, and numbers attach to it as they are seen.
+CREATE TABLE IF NOT EXISTS callers (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  slug        TEXT NOT NULL UNIQUE,   -- normalized key used for matching
+  category    TEXT,
+  note        TEXT,
+  -- Set when the user renames or recategorizes by hand; extraction must never
+  -- overwrite a human correction.
+  pinned      INTEGER DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS caller_numbers (
+  number      TEXT PRIMARY KEY,
+  caller_id   TEXT NOT NULL,
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL,
+  call_count  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_caller_numbers_caller ON caller_numbers (caller_id);
 
 -- WebAuthn passkeys. The primary way in: nothing to forget.
 CREATE TABLE IF NOT EXISTS credentials (

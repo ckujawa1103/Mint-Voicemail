@@ -69,9 +69,10 @@ export const api = {
   auditLog: () => request('/auth/audit'),
 
   /* voicemails */
-  list: (filter = 'inbox', q = '') => {
+  list: (filter = 'inbox', q = '', callerId = null) => {
     const params = new URLSearchParams({ filter });
     if (q) params.set('q', q);
+    if (callerId) params.set('callerId', callerId);
     return request(`/api/voicemails?${params}`);
   },
   get: (id) => request(`/api/voicemails/${id}`),
@@ -84,6 +85,15 @@ export const api = {
     request('/api/voicemails/bulk', { method: 'POST', body: { action, ids: [...ids] } }),
   retranscribe: (id) => request(`/api/voicemails/${id}/retranscribe`, { method: 'POST', body: {} }),
   stats: () => request('/api/stats'),
+
+  /* caller groups */
+  callers: () => request('/api/callers'),
+  updateCaller: (id, patch) => request(`/api/callers/${id}`, { method: 'PATCH', body: patch }),
+  mergeCaller: (id, into) => request(`/api/callers/${id}/merge`, { method: 'POST', body: { into } }),
+  deleteCaller: (id) => request(`/api/callers/${id}`, { method: 'DELETE' }),
+  identifyPending: (batch = 5) =>
+    request('/api/callers/identify-pending', { method: 'POST', body: { batch } }),
+
 
   /* push */
   pushKey: () => request('/api/push/key'),
