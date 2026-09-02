@@ -10,6 +10,10 @@ database_name = "mint-voicemail"
 database_id = "f49b3a24-a26a-410f-8e41-354288af13f1"
 
 # Audio blobs. R2 has no egress fees, so streaming voicemail is free.
+# Workers AI: used to extract who a caller is from the transcript.
+[ai]
+binding = "AI"
+
 [[r2_buckets]]
 binding = "AUDIO"
 bucket_name = "mint-voicemail-audio"

@@ -62,10 +62,14 @@ export default function Inbox({ route }) {
     if (m) setOpenId(m[1]);
   }, [route]);
 
+  // #/caller/<id> narrows the list to one caller group — every number that
+  // entity has used, which is the whole point of grouping them.
+  const callerId = /^\/caller\/([\w-]+)$/.exec(route || '')?.[1] ?? null;
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, s] = await Promise.all([api.list(filter, query), api.stats()]);
+      const [list, s] = await Promise.all([api.list(filter, query, callerId), api.stats()]);
       setItems(list.voicemails);
       setStats(s);
       setError(null);
@@ -74,7 +78,7 @@ export default function Inbox({ route }) {
     } finally {
       setLoading(false);
     }
-  }, [filter, query]);
+  }, [filter, query, callerId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -458,8 +462,11 @@ function VoicemailCard({
         <div className="vm-main">
           <div className="vm-from">
             {!vm.isRead && <span className="dot" aria-label="Unread" />}
-            {vm.fromLabel}
-            {vm.fromCity && <span className="loc">{vm.fromCity}, {vm.fromState}</span>}
+            {vm.callerName || vm.fromLabel}
+            {vm.callerName && <span className="loc">{vm.fromLabel}</span>}
+            {!vm.callerName && vm.fromCity && (
+              <span className="loc">{vm.fromCity}, {vm.fromState}</span>
+            )}
           </div>
           <div className="vm-preview">
             {vm.transcriptStatus === 'pending' && <em className="muted">Transcribing…</em>}

@@ -3,6 +3,7 @@ import { api, getToken, setToken } from './api.js';
 import Login from './components/Login.jsx';
 import Inbox from './components/Inbox.jsx';
 import Settings from './components/Settings.jsx';
+import Callers from './components/Callers.jsx';
 import RecoveryCodes from './components/RecoveryCodes.jsx';
 import DialogHost, { dialogs } from './components/Dialog.jsx';
 
@@ -106,15 +107,19 @@ export default function App() {
         </a>
         <nav>
           <a href="#/" className={route === '/' || route.startsWith('/vm') ? 'active' : ''}>Inbox</a>
+          <a href="#/callers" className={route === '/callers' ? 'active' : ''}>Callers</a>
           <a href="#/settings" className={route === '/settings' ? 'active' : ''}>Settings</a>
           <button className="link" onClick={onSignOut}>Sign out</button>
         </nav>
       </header>
 
       <main>
-        {route === '/settings'
-          ? <Settings onSignOut={onSignOut} />
-          : <Inbox route={route} />}
+        {route === '/settings' ? <Settings onSignOut={onSignOut} />
+          : route === '/callers'
+            // Opening a group jumps to the inbox filtered to that caller —
+            // every number they've ever used, in one list.
+            ? <Callers onOpenGroup={(c) => { window.location.hash = `#/caller/${c.id}`; }} />
+            : <Inbox route={route} />}
       </main>
     </div>,
   );
